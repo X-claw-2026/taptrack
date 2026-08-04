@@ -1396,7 +1396,8 @@ function exportToMarkdown() {
     
     const grouped = {};
     sorted.forEach(r => {
-        const date = new Date(r.startTime).toLocaleDateString();
+        const d = new Date(r.startTime);
+        const date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         if (!grouped[date]) grouped[date] = [];
         grouped[date].push(r);
     });
@@ -1430,8 +1431,8 @@ function importFromMarkdown(event) {
         try {
             const records = parseMarkdown(e.target.result);
             if (records.length === 0) { alert(i18n[state.lang].importError); return; }
-            const existing = new Set(state.records.map(r => r.id));
-            const newRecs = records.filter(r => !existing.has(r.id));
+            const existing = new Set(state.records.map(r => r.startTime + '|' + r.duration));
+            const newRecs = records.filter(r => !existing.has(r.startTime + '|' + r.duration));
             state.records = [...state.records, ...newRecs];
             saveRecords();
             updateRecordsList();
@@ -1449,18 +1450,27 @@ function parseMarkdown(content) {
     const lines = content.split('\n');
     const timePattern = /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*\((\d+)\s*min\)/;
     let currentDate = null;
-    
+    let pending = null; // 暂存当前记录，等待后续注释/标签行补齐
+
+    function commit() {
+        if (pending) { records.push(pending); pending = null; }
+    }
+
     lines.forEach(line => {
-        const dateMatch = line.match(/## (\d{4}-\d{2}-\d{2})/);
-        if (dateMatch) { currentDate = new Date(dateMatch[1]); return; }
+        const dateMatch = line.match(/## (\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+        if (dateMatch) { commit(); currentDate = new Date(dateMatch[1], dateMatch[2] - 1, dateMatch[3]); return; }
+        const commentMatch = line.match(/^> (.*)$/);
+        if (commentMatch && pending) { pending.comment = commentMatch[1]; return; }
+        const tagMatch = line.match(/^\*\*Tags:\*\* (.+)$/);
+        if (tagMatch && pending) { pending.tags = tagMatch[1].split(',').map(t => t.trim()).filter(Boolean); return; }
         const match = line.match(timePattern);
         if (match && currentDate) {
+            commit(); // 新记录行到来，先把上一条落库
             const [sh, sm] = match[1].split(':').map(Number);
             const [eh, em] = match[2].split(':').map(Number);
             const start = new Date(currentDate); start.setHours(sh, sm, 0, 0);
             const end = new Date(currentDate); end.setHours(eh, em, 0, 0);
-            records.push({
-                id: Date.now() + Math.random() * 1000,
+            pending = {
                 startTime: start.getTime(),
                 endTime: end.getTime(),
                 rawDuration: parseInt(match[3]) * 60,
@@ -1468,9 +1478,11 @@ function parseMarkdown(content) {
                 adjustSeconds: 0,
                 comment: '',
                 tags: []
-            });
+            };
         }
     });
+    commit(); // 收尾，落最后一条
+    return records;
     return records;
 }</script>
 </body>
